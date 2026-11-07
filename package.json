@@ -1,0 +1,1 @@
+{"name":"irfan-al-uloom-zakat-simple","version":"1.2.0","private":true,"description":"Simple Urdu cash-minus-deductible-debt Zakat calculator","scripts":{"build":"echo Static web assets ready for Capacitor"},"dependencies":{"@capacitor/android":"^6.0.0","@capacitor/core":"^6.0.0"},"devDependencies":{"@capacitor/cli":"^6.0.0"}}
