@@ -1,0 +1,71 @@
+
+name: Irfan al-Uloom Zakat Android Build
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Extract Updated Source ZIP
+        run: |
+          mkdir extracted
+          unzip -q Irfan-Al-Uloom-Zakat-Updated-Source-v1.3.0.zip -d extracted
+          ROOT_DIR=$(find extracted -mindepth 1 -maxdepth 1 -type d | head -n 1)
+          test -n "$ROOT_DIR"
+          cp -a "$ROOT_DIR"/. .
+          test -f package.json
+          test -f capacitor.config.json
+          test -f www/index.html
+
+      - name: Install Dependencies
+        run: npm install
+
+      - name: Build Web Assets
+        run: npm run build
+
+      - name: Add Android Platform
+        run: npx cap add android
+
+      - name: Sync Android
+        run: npx cap sync android
+
+      - name: Configure AdMob
+        run: npm run android:admob
+
+      - name: Build Android APK and AAB
+        run: |
+          cd android
+          chmod +x gradlew
+          ./gradlew assembleDebug bundleRelease
+
+      - name: Upload APK and AAB
+        uses: actions/upload-artifact@v4
+        with:
+          name: Irfan-Zakat-Android-Build
+          path: |
+            android/app/build/outputs/apk/debug/*.apk
+            android/app/build/outputs/bundle/release/*.aab
+          if-no-files-found: error
