@@ -28,13 +28,24 @@ jobs:
           distribution: temurin
           java-version: '17'
 
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android SDK 36
+        run: |
+          sdkmanager "platforms;android-36" "build-tools;36.0.0"
+          sdkmanager --list_installed
+
       - name: Extract Updated Source ZIP
         run: |
           mkdir extracted
           unzip -q Irfan-Al-Uloom-Zakat-Updated-Source-v1.3.0.zip -d extracted
+
           ROOT_DIR=$(find extracted -mindepth 1 -maxdepth 1 -type d | head -n 1)
+
           test -n "$ROOT_DIR"
           cp -a "$ROOT_DIR"/. .
+
           test -f package.json
           test -f capacitor.config.json
           test -f www/index.html
@@ -65,13 +76,82 @@ jobs:
       - name: Configure AdMob
         run: npm run android:admob
 
+      - name: Enforce Android SDK and Version
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          variables = Path("android/variables.gradle")
+          app = Path("android/app/build.gradle")
+
+          if not variables.exists():
+              raise SystemExit("variables.gradle not found")
+
+          if not app.exists():
+              raise SystemExit("app/build.gradle not found")
+
+          s = variables.read_text()
+
+          settings = {
+              "minSdkVersion": 24,
+              "compileSdkVersion": 36,
+              "targetSdkVersion": 36,
+          }
+
+          for key, value in settings.items():
+              pattern = rf'(\b{key}\s*=\s*)\d+'
+              s, count = re.subn(pattern, rf'\g<1>{value}', s)
+
+              if count == 0:
+                  raise SystemExit(f"{key} not found in variables.gradle")
+
+          variables.write_text(s)
+
+          s = app.read_text()
+
+          default_config = re.search(r'\bdefaultConfig\s*\{', s)
+
+          if not default_config:
+              raise SystemExit("defaultConfig block not found")
+
+          version_pattern = r'(\bversionCode\s+)\d+'
+
+          s, count = re.subn(
+              version_pattern,
+              r'\g<1>2',
+              s,
+              count=1
+          )
+
+          if count == 0:
+              raise SystemExit("versionCode not found")
+
+          app.write_text(s)
+
+          print("MIN SDK = 24")
+          print("COMPILE SDK = 36")
+          print("TARGET SDK = 36")
+          print("VERSION CODE = 2")
+          PY
+
+          echo "===== SDK CONFIGURATION ====="
+          cat android/variables.gradle
+
+          echo "===== VERSION CODE ====="
+          grep -n "versionCode" android/app/build.gradle
+
       - name: Restore Original Signing Key
         env:
           KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
         run: |
           test -n "$KEYSTORE_BASE64"
+
           mkdir -p android/app
-          printf '%s' "$KEYSTORE_BASE64" | base64 --decode > android/app/signing.keystore
+
+          printf '%s' "$KEYSTORE_BASE64" | base64 --decode \
+            > android/app/signing.keystore
+
           test -s android/app/signing.keystore
           chmod 600 android/app/signing.keystore
 
@@ -82,19 +162,21 @@ jobs:
           import re
 
           p = Path("android/app/build.gradle")
+
           if not p.exists():
-              raise SystemExit("Android Groovy build.gradle not found")
+              raise SystemExit("build.gradle not found")
 
           s = p.read_text()
 
           if "signingConfigs {" in s:
-              raise SystemExit("Signing configuration already exists. Check build.gradle.")
+              raise SystemExit("Existing signingConfigs found. Manual review required.")
 
           android = re.search(r'\bandroid\s*\{', s)
-          if not android:
-              raise SystemExit("android block not found")
 
-          signing = '''
+          if not android:
+              raise SystemExit("Android block not found")
+
+          signing = """
               signingConfigs {
                   release {
                       storeFile file("signing.keystore")
@@ -103,19 +185,25 @@ jobs:
                       keyPassword System.getenv("KEY_PASSWORD")
                   }
               }
+          """
 
-          '''
           s = s[:android.end()] + "\n" + signing + s[android.end():]
 
           build_types = re.search(r'\bbuildTypes\s*\{', s)
+
           if not build_types:
               raise SystemExit("buildTypes block not found")
 
-          release = re.search(r'\brelease\s*\{', s[build_types.end():])
+          release = re.search(
+              r'\brelease\s*\{',
+              s[build_types.end():]
+          )
+
           if not release:
-              raise SystemExit("release build type not found")
+              raise SystemExit("Release block not found")
 
           start = build_types.end() + release.end() - 1
+
           depth = 0
           end = None
 
@@ -124,16 +212,23 @@ jobs:
                   depth += 1
               elif s[i] == '}':
                   depth -= 1
+
                   if depth == 0:
                       end = i
                       break
 
           if end is None:
-              raise SystemExit("Could not locate release block")
+              raise SystemExit("Release block parsing failed")
 
-          s = s[:end] + "\n            signingConfig signingConfigs.release\n        " + s[end:]
+          s = (
+              s[:end]
+              + "\n            signingConfig signingConfigs.release\n        "
+              + s[end:]
+          )
+
           p.write_text(s)
-          print("Release signing configured successfully.")
+
+          print("Release signing configured.")
           PY
 
       - name: Build Signed Android APK and AAB
@@ -147,23 +242,33 @@ jobs:
           test -n "$KEY_PASSWORD"
 
           cd android
+
           chmod +x gradlew
-          ./gradlew assembleRelease bundleRelease
+
+          ./gradlew clean assembleRelease bundleRelease
 
       - name: Verify Package Name and Signing
-        env:
-          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
-          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
         shell: bash
         run: |
-          echo "===== CAPACITOR APP ID ====="
+          set -e
+
+          echo "===== APP CONFIGURATION ====="
           cat capacitor.config.json
 
-          echo "===== ANDROID APPLICATION ID ====="
-          grep -R -n "applicationId" android/app/build.gradle*
+          echo "===== APPLICATION ID ====="
+          grep -n "applicationId" android/app/build.gradle
 
-          AAB=$(find android/app/build/outputs/bundle/release -name "*.aab" -print -quit)
-          APK=$(find android/app/build/outputs/apk/release -name "*.apk" -print -quit)
+          echo "===== SDK CONFIGURATION ====="
+          cat android/variables.gradle
+
+          echo "===== VERSION CODE ====="
+          grep -n "versionCode" android/app/build.gradle
+
+          AAB=$(find android/app/build/outputs/bundle/release \
+            -name "*.aab" -print -quit)
+
+          APK=$(find android/app/build/outputs/apk/release \
+            -name "*.apk" -print -quit)
 
           test -n "$AAB"
           test -n "$APK"
@@ -172,22 +277,30 @@ jobs:
           jarsigner -verify -verbose -certs "$AAB"
 
           echo "===== VERIFY APK SIGNATURE ====="
-          APKSIGNER=$(find "$ANDROID_HOME/build-tools" -name apksigner | sort -V | tail -n 1)
+          APKSIGNER=$(find "$ANDROID_HOME/build-tools" \
+            -name apksigner | sort -V | tail -n 1)
+
           test -n "$APKSIGNER"
+
           "$APKSIGNER" verify --verbose --print-certs "$APK"
 
           echo "===== VERIFY AAB SHA1 ====="
+
           keytool -printcert -jarfile "$AAB"
 
-          ACTUAL_SHA1=$(keytool -printcert -jarfile "$AAB" | awk -F': ' '/SHA1:/{print $2; exit}' | tr -d '[:space:]' | tr '[:lower:]' '[:upper:]')
+          ACTUAL_SHA1=$(keytool -printcert -jarfile "$AAB" \
+            | awk -F': ' '/SHA1:/{print $2; exit}' \
+            | tr -d '[:space:]' \
+            | tr '[:lower:]' '[:upper:]')
+
           EXPECTED_SHA1="1C:F9:47:39:B1:55:F9:73:FD:44:85:4A:E6:2B:E9:2E:A2:DF:7D:13"
 
           if [ "$ACTUAL_SHA1" != "$EXPECTED_SHA1" ]; then
-            echo "ERROR: AAB SHA1 DOES NOT MATCH ORIGINAL KEY"
+            echo "ERROR: SHA1 DOES NOT MATCH"
             exit 1
           fi
 
-          echo "SUCCESS: ORIGINAL SIGNING KEY VERIFIED"
+          echo "SUCCESS: ORIGINAL KEY VERIFIED"
 
       - name: Upload Signed APK and AAB
         uses: actions/upload-artifact@v4
@@ -197,3 +310,4 @@ jobs:
             android/app/build/outputs/apk/release/*.apk
             android/app/build/outputs/bundle/release/*.aab
           if-no-files-found: error
+          retention-days: 14
