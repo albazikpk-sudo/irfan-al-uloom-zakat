@@ -28,54 +28,79 @@ jobs:
           distribution: temurin
           java-version: '17'
 
+      # Android SDK Setup
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
 
+      - name: Accept Android SDK Licenses
+        run: |
+          yes | sdkmanager --licenses
+
       - name: Install Android SDK 36
         run: |
-          sdkmanager "platforms;android-36" "build-tools;36.0.0"
+          sdkmanager --install \
+            "platform-tools" \
+            "platforms;android-36" \
+            "build-tools;36.0.0"
+
           sdkmanager --list_installed
 
+          test -d "$ANDROID_HOME/platforms/android-36"
+          test -d "$ANDROID_HOME/build-tools/36.0.0"
+
+          echo "ANDROID SDK 36 VERIFIED"
+
+      # Extract Application Source
       - name: Extract Updated Source ZIP
         run: |
           mkdir extracted
+
           unzip -q Irfan-Al-Uloom-Zakat-Updated-Source-v1.3.0.zip -d extracted
 
           ROOT_DIR=$(find extracted -mindepth 1 -maxdepth 1 -type d | head -n 1)
 
           test -n "$ROOT_DIR"
+
           cp -a "$ROOT_DIR"/. .
 
           test -f package.json
           test -f capacitor.config.json
           test -f www/index.html
 
+      # App Icon
       - name: Verify App Icon
         run: |
           test -f icons/icon-512.png
+
           mkdir -p assets
+
           cp icons/icon-512.png assets/icon.png
 
+      # Dependencies
       - name: Install Dependencies
         run: npm install
 
       - name: Build Web Assets
         run: npm run build
 
+      # Capacitor Android
       - name: Add Android Platform
         run: npx cap add android
 
       - name: Generate Android App Icons
         run: |
           npm install --no-save @capacitor/assets
+
           npx capacitor-assets generate --android
 
       - name: Sync Android
         run: npx cap sync android
 
+      # AdMob
       - name: Configure AdMob
         run: npm run android:admob
 
+      # SDK and Version Configuration
       - name: Enforce Android SDK and Version
         run: |
           python3 - <<'PY'
@@ -101,24 +126,25 @@ jobs:
 
           for key, value in settings.items():
               pattern = rf'(\b{key}\s*=\s*)\d+'
-              s, count = re.subn(pattern, rf'\g<1>{value}', s)
+
+              s, count = re.subn(
+                  pattern,
+                  rf'\g<1>{value}',
+                  s
+              )
 
               if count == 0:
-                  raise SystemExit(f"{key} not found in variables.gradle")
+                  raise SystemExit(f"{key} not found")
 
           variables.write_text(s)
 
           s = app.read_text()
 
-          default_config = re.search(r'\bdefaultConfig\s*\{', s)
-
-          if not default_config:
+          if not re.search(r'\bdefaultConfig\s*\{', s):
               raise SystemExit("defaultConfig block not found")
 
-          version_pattern = r'(\bversionCode\s+)\d+'
-
           s, count = re.subn(
-              version_pattern,
+              r'(\bversionCode\s+)\d+',
               r'\g<1>2',
               s,
               count=1
@@ -141,6 +167,7 @@ jobs:
           echo "===== VERSION CODE ====="
           grep -n "versionCode" android/app/build.gradle
 
+      # Restore Original Keystore
       - name: Restore Original Signing Key
         env:
           KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
@@ -153,8 +180,12 @@ jobs:
             > android/app/signing.keystore
 
           test -s android/app/signing.keystore
+
           chmod 600 android/app/signing.keystore
 
+          echo "ORIGINAL KEYSTORE RESTORED"
+
+      # Configure Release Signing
       - name: Configure Release Signing
         run: |
           python3 - <<'PY'
@@ -169,7 +200,7 @@ jobs:
           s = p.read_text()
 
           if "signingConfigs {" in s:
-              raise SystemExit("Existing signingConfigs found. Manual review required.")
+              raise SystemExit("Existing signingConfigs found")
 
           android = re.search(r'\bandroid\s*\{', s)
 
@@ -228,9 +259,10 @@ jobs:
 
           p.write_text(s)
 
-          print("Release signing configured.")
+          print("RELEASE SIGNING CONFIGURED")
           PY
 
+      # Build Signed APK and AAB
       - name: Build Signed Android APK and AAB
         env:
           KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
@@ -247,12 +279,13 @@ jobs:
 
           ./gradlew clean assembleRelease bundleRelease
 
+      # Verify Build and Signing
       - name: Verify Package Name and Signing
         shell: bash
         run: |
           set -e
 
-          echo "===== APP CONFIGURATION ====="
+          echo "===== CAPACITOR APP ID ====="
           cat capacitor.config.json
 
           echo "===== APPLICATION ID ====="
@@ -277,6 +310,7 @@ jobs:
           jarsigner -verify -verbose -certs "$AAB"
 
           echo "===== VERIFY APK SIGNATURE ====="
+
           APKSIGNER=$(find "$ANDROID_HOME/build-tools" \
             -name apksigner | sort -V | tail -n 1)
 
@@ -302,6 +336,7 @@ jobs:
 
           echo "SUCCESS: ORIGINAL KEY VERIFIED"
 
+      # Upload Build Artifacts
       - name: Upload Signed APK and AAB
         uses: actions/upload-artifact@v4
         with:
