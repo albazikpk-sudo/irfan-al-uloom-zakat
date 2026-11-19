@@ -40,6 +40,12 @@ jobs:
           test -f capacitor.config.json
           test -f www/index.html
 
+      - name: Verify App Icon
+        run: |
+          test -f icons/icon-512.png
+          mkdir -p assets
+          cp icons/icon-512.png assets/icon.png
+
       - name: Install Dependencies
         run: npm install
 
@@ -48,6 +54,11 @@ jobs:
 
       - name: Add Android Platform
         run: npx cap add android
+
+      - name: Generate Android App Icons
+        run: |
+          npm install --no-save @capacitor/assets
+          npx capacitor-assets generate --android
 
       - name: Sync Android
         run: npx cap sync android
