@@ -14,45 +14,88 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      # 1. Checkout
       - name: Checkout Repository
         uses: actions/checkout@v4
 
+      # 2. Node.js
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: 20
 
+      # 3. Java
       - name: Setup Java
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
 
-      # Android SDK Setup
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
-
-      - name: Accept Android SDK Licenses
+      # 4. Initialize Preinstalled Android SDK
+      - name: Initialize Android SDK
+        shell: bash
         run: |
-          yes | sdkmanager --licenses
+          set -e
 
+          SDK_ROOT="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"
+
+          test -d "$SDK_ROOT"
+
+          SDKMANAGER=$(find "$SDK_ROOT/cmdline-tools" \
+            -type f -name sdkmanager | sort -V | tail -n 1)
+
+          if [ -z "$SDKMANAGER" ]; then
+            SDKMANAGER=$(command -v sdkmanager || true)
+          fi
+
+          test -n "$SDKMANAGER"
+
+          echo "ANDROID_HOME=$SDK_ROOT" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$SDK_ROOT" >> "$GITHUB_ENV"
+          echo "$(dirname "$SDKMANAGER")" >> "$GITHUB_PATH"
+          echo "$SDK_ROOT/platform-tools" >> "$GITHUB_PATH"
+
+          echo "Android SDK initialized."
+          echo "SDK Manager: $SDKMANAGER"
+
+          printf '%s\n' "$SDKMANAGER" > /tmp/sdkmanager-path.txt
+
+      # 5. Accept Licenses and Install SDK
       - name: Install Android SDK 36
+        shell: bash
         run: |
-          sdkmanager --install \
+          set -e
+
+          SDKMANAGER=$(cat /tmp/sdkmanager-path.txt)
+          SDK_ROOT="$ANDROID_HOME"
+
+          set +e
+          yes | "$SDKMANAGER" --sdk_root="$SDK_ROOT" --licenses
+          LICENSE_STATUS=${PIPESTATUS[1]}
+          set -e
+
+          if [ "$LICENSE_STATUS" -ne 0 ]; then
+            echo "Android SDK license acceptance failed."
+            exit 1
+          fi
+
+          "$SDKMANAGER" --sdk_root="$SDK_ROOT" --install \
             "platform-tools" \
             "platforms;android-36" \
             "build-tools;36.0.0"
 
-          sdkmanager --list_installed
+          "$SDKMANAGER" --sdk_root="$SDK_ROOT" --list_installed
 
-          test -d "$ANDROID_HOME/platforms/android-36"
-          test -d "$ANDROID_HOME/build-tools/36.0.0"
+          test -d "$SDK_ROOT/platforms/android-36"
+          test -d "$SDK_ROOT/build-tools/36.0.0"
 
           echo "ANDROID SDK 36 VERIFIED"
 
-      # Extract Application Source
+      # 6. Extract Source ZIP
       - name: Extract Updated Source ZIP
         run: |
+          set -e
+
           mkdir extracted
 
           unzip -q Irfan-Al-Uloom-Zakat-Updated-Source-v1.3.0.zip -d extracted
@@ -67,42 +110,50 @@ jobs:
           test -f capacitor.config.json
           test -f www/index.html
 
-      # App Icon
+      # 7. Verify Icon
       - name: Verify App Icon
         run: |
+          set -e
+
           test -f icons/icon-512.png
 
           mkdir -p assets
 
           cp icons/icon-512.png assets/icon.png
 
-      # Dependencies
+      # 8. Install Dependencies
       - name: Install Dependencies
         run: npm install
 
+      # 9. Build Web Assets
       - name: Build Web Assets
         run: npm run build
 
-      # Capacitor Android
+      # 10. Add Android
       - name: Add Android Platform
         run: npx cap add android
 
+      # 11. Generate Icons
       - name: Generate Android App Icons
         run: |
           npm install --no-save @capacitor/assets
 
           npx capacitor-assets generate --android
 
+      # 12. Sync Android
       - name: Sync Android
         run: npx cap sync android
 
-      # AdMob
+      # 13. AdMob
       - name: Configure AdMob
         run: npm run android:admob
 
-      # SDK and Version Configuration
+      # 14. SDK and Version Configuration
       - name: Enforce Android SDK and Version
+        shell: bash
         run: |
+          set -e
+
           python3 - <<'PY'
           from pathlib import Path
           import re
@@ -134,7 +185,7 @@ jobs:
               )
 
               if count == 0:
-                  raise SystemExit(f"{key} not found")
+                  raise SystemExit(f"{key} not found in variables.gradle")
 
           variables.write_text(s)
 
@@ -167,11 +218,13 @@ jobs:
           echo "===== VERSION CODE ====="
           grep -n "versionCode" android/app/build.gradle
 
-      # Restore Original Keystore
+      # 15. Restore Original Keystore
       - name: Restore Original Signing Key
         env:
           KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
         run: |
+          set -e
+
           test -n "$KEYSTORE_BASE64"
 
           mkdir -p android/app
@@ -185,7 +238,7 @@ jobs:
 
           echo "ORIGINAL KEYSTORE RESTORED"
 
-      # Configure Release Signing
+      # 16. Configure Release Signing
       - name: Configure Release Signing
         run: |
           python3 - <<'PY'
@@ -262,13 +315,15 @@ jobs:
           print("RELEASE SIGNING CONFIGURED")
           PY
 
-      # Build Signed APK and AAB
+      # 17. Build Signed APK and AAB
       - name: Build Signed Android APK and AAB
         env:
           KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
           KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
         run: |
+          set -e
+
           test -n "$KEYSTORE_PASSWORD"
           test -n "$KEY_ALIAS"
           test -n "$KEY_PASSWORD"
@@ -279,7 +334,7 @@ jobs:
 
           ./gradlew clean assembleRelease bundleRelease
 
-      # Verify Build and Signing
+      # 18. Verify Package, SDK and Signing
       - name: Verify Package Name and Signing
         shell: bash
         run: |
@@ -336,7 +391,7 @@ jobs:
 
           echo "SUCCESS: ORIGINAL KEY VERIFIED"
 
-      # Upload Build Artifacts
+      # 19. Upload Artifacts
       - name: Upload Signed APK and AAB
         uses: actions/upload-artifact@v4
         with:
