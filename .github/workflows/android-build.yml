@@ -72,6 +72,24 @@ jobs:
           chmod +x gradlew
           ./gradlew assembleDebug bundleRelease
 
+      - name: Verify Package Name and Signing
+        shell: bash
+        run: |
+          echo "===== CAPACITOR APP ID ====="
+          cat capacitor.config.json
+
+          echo "===== ANDROID APPLICATION ID ====="
+          grep -R -n "applicationId" android/app/build.gradle* || true
+
+          AAB=$(find android/app/build/outputs/bundle/release -name "*.aab" -print -quit)
+          test -n "$AAB"
+
+          echo "===== AAB SIGNING CERTIFICATE ====="
+          keytool -printcert -jarfile "$AAB" || true
+
+          echo "===== AAB SIGNATURE VERIFICATION ====="
+          jarsigner -verify -verbose -certs "$AAB" || true
+
       - name: Upload APK and AAB
         uses: actions/upload-artifact@v4
         with:
